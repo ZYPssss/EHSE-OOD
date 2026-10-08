@@ -80,7 +80,7 @@ EHSE-OOD/
 ├── main_OGB.py                    # OGB cross-dataset experiments
 ├── pre_train.py                   # EHA pretraining routine
 ├── environment.yml                # Conda environment
-└── model.pdf                      # Model architecture figure
+└── model.png                      # Model architecture figure
 ```
 
 ---
