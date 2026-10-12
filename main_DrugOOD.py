@@ -81,7 +81,7 @@ def get_backend_config(args, dataset_num_features, input_edge_dim):
                 "num_layer": args.num_layer,
                 "drop_ratio": 0.1,
                 "JK": "all",
-                "graph_pooling": "mean",
+                "pooling": "mean",
                 "residual": False,
                 "input_dim": input_dim,
                 "input_edge_dim": input_edge_dim,
@@ -122,7 +122,7 @@ def get_backend_config(args, dataset_num_features, input_edge_dim):
                 "num_layer": args.num_layer,
                 "drop_ratio": 0.1,
                 "JK": "all",
-                "graph_pooling": "mean",
+                "pooling": "mean",
                 "residual": False,
                 "input_dim": args.dg_dim + args.rw_dim,
                 "input_edge_dim": input_edge_dim,
@@ -134,12 +134,12 @@ def get_backend_config(args, dataset_num_features, input_edge_dim):
 def arg_parse():
     parser = argparse.ArgumentParser()
     parser.add_argument("-exp_type", type=str, default="oodd", choices=["oodd", "ad"])
-    parser.add_argument('--gpu-id', type=int, default=2,
+    parser.add_argument('--gpu-id', type=int, default=0,
                         help='which gpu to use if any (default: 0)')
     parser.add_argument('--dataset', default="DrugOOD", type=str,
                         choices=['DrugOOD', 'GOOD', 'OGB'],
                         help='dataset name (plym-, ogbg-)')
-    parser.add_argument("--base_backend_type", type=str, default='GCN', choices=['GIN', 'GCN', 'SAGE'])
+    parser.add_argument("--base_backend_type", type=str, default='SAGE', choices=['GIN', 'GCN', 'SAGE'])
     parser.add_argument('--data-root', default="./data/", type=str)
     parser.add_argument('--dataset_name', default="ic50_scaffold", type=str)
     parser.add_argument('--pre_save_path', default="./result/pretrain", type=str)
@@ -148,6 +148,7 @@ def arg_parse():
     parser.add_argument("-dg_dim", type=int, default=16)
     parser.add_argument("-batch_size", type=int, default=128)
     parser.add_argument("-batch_size_test", type=int, default=800)
+    parser.add_argument("-train_test_ratio", type=float, default=1.0)
     parser.add_argument("-lr", type=float, default=0.0001)
     parser.add_argument("-num_layer", type=int, default=5)
     parser.add_argument("-hidden_dim", type=int, default=128)
@@ -156,7 +157,7 @@ def arg_parse():
     parser.add_argument("-is_adaptive", type=int, default=1)
     parser.add_argument("-num_cluster", type=int, default=2)
     parser.add_argument("-alpha", type=float, default=0.1)
-    parser.add_argument("-gamma", type=float, default=0.1)
+    parser.add_argument("-gamma", type=float, default=0.2)
     parser.add_argument("-lam", type=float, default=0.1)
     parser.add_argument("-iid_size", type=int, default=8000)
     parser.add_argument("-ood_size", type=int, default=5000)
@@ -173,12 +174,12 @@ def arg_parse():
     parser.add_argument("--t_drop_root", action="store_true")
     parser.add_argument("-num_epoch", type=int, default=400)
     parser.add_argument("-pre_epochs", type=int, default=500)
-    parser.add_argument("--t_learning_rate", type=float, default=0.001)
+    parser.add_argument("--t_learning_rate", type=float, default=0.0001)
     parser.add_argument("--t_use_ecloud", type=bool, default=True)
 
     # ecloud parameters
     parser.add_argument("--ecloud_dim", type=int, default=64)
-    parser.add_argument("--use_ecloud", type=bool, default=False)
+    parser.add_argument("--use_ecloud", type=bool, default=True)
 
     return parser.parse_args()
 
@@ -246,55 +247,7 @@ def loss_at(g_f, y_pred):
     )
 
 
-def inference_learn1(model, tM, tOpt, dataloader_test, num_epoch, device):
-    for epoch in range(1, num_epoch):
-        model.eval()
-        tM.train()
-        tOpt.zero_grad()
-        y_score_all = []
-        y_true_all = []
-        for data in dataloader_test:
-            data = data.to(device)
-            b, g_f, g_s, n_f, n_s = model(
-                x_f=data.x,
-                x_s=data.x_s,
-                edge_index=data.edge_index,
-                ecloud_data=data.ecloud_data,
-                batch=data.batch,
-                num_graphs=data.num_graphs
-            )
-            x_hrn = tM(data)
-
-            y_pred, y_pred_t = g_f.softmax(dim=1).cpu(), x_hrn.softmax(dim=1).cpu()
-            y_pred, y_pred_t = y_pred.detach().numpy(), y_pred_t.detach().numpy()
-            y_pred, y_pred_t = np.argmax(y_pred, axis=1), np.argmax(y_pred_t, axis=1)
-            y_pred, y_pred_t = (
-                torch.tensor(y_pred).to(device),
-                torch.tensor(y_pred_t).to(device),
-            )
-
-            y_score_g = model.calc_loss_g(g_f, g_s)
-            y_score_b = model.calc_loss_t(x_hrn, g_f)
-
-            loss = y_score_b.mean()
-            loss += loss_CRI(g_f, x_hrn, y_pred, y_pred_t).mean()
-            loss.backward()
-            tOpt.step()
-
-            y_score = y_score_b
-            y_score += loss_CRI(g_f, x_hrn, y_pred, y_pred_t)
-
-            y_true = data.y
-            y_score_all += y_score.detach().cpu().tolist()
-            y_true_all += y_true.detach().cpu().tolist()
-
-        auc = skm.roc_auc_score(y_true_all, y_score_all)
-        aupr = skm.average_precision_score(y_true_all, y_score_all)
-        print(f"[ONLINE RE-TRAINING] Epoch: {epoch:03d} | AUC:{auc:.4f} | AUPR:{aupr:.4f}")
-
-    return y_true_all, y_score_all
-
-def inference_learn(model, tM, tOpt, data, num_epoch):
+def inference_learn1(model, tM, tOpt, data, num_epoch):
     best_scores = None
     best_auc = 0.0
     best_aupr = 0.0
@@ -345,6 +298,50 @@ def inference_learn(model, tM, tOpt, data, num_epoch):
 
     return best_scores
 
+def inference_learn(model, tM, tOpt, data, num_epoch):
+    for epoch in range(0, num_epoch):
+        model.eval()
+        tM.train()
+        tOpt.zero_grad()
+        b, g_f, g_s, n_f, n_s = model(
+            x_f=data.x,
+            x_s=data.x_s,
+            edge_index=data.edge_index,
+            edge_attr=data.edge_attr,
+            ecloud_data=data.ecloud_data,
+            batch=data.batch,
+            num_graphs=data.num_graphs
+        )
+        x_hrn = tM(data)
+
+        y_pred, y_pred_t = g_f.softmax(dim=1).cpu(), x_hrn.softmax(dim=1).cpu()
+        y_pred, y_pred_t = y_pred.detach().numpy(), y_pred_t.detach().numpy()
+        y_pred, y_pred_t = np.argmax(y_pred, axis=1), np.argmax(y_pred_t, axis=1)
+        y_pred, y_pred_t = (
+            torch.tensor(y_pred).to(device),
+            torch.tensor(y_pred_t).to(device),
+        )
+
+        # y_score_g = model.calc_loss_g(g_f, g_s)
+        y_score_b = model.calc_loss_t(x_hrn, g_f)
+
+        loss = y_score_b.mean()
+        loss += loss_CRI(g_f, x_hrn, y_pred, y_pred_t).mean()
+        loss.backward()
+        tOpt.step()
+
+        y_score = y_score_b
+        y_score += loss_CRI(g_f, x_hrn, y_pred, y_pred_t)
+
+        y_true = data.y
+        auc = skm.roc_auc_score(
+            y_true.detach().cpu().tolist(), y_score.detach().cpu().tolist()
+        )
+        aupr = skm.average_precision_score(y_true.detach().cpu().tolist(), y_score.detach().cpu().tolist())
+        print(f"[ONLINE RE-TRAINING] Epoch: {epoch:03d} | AUC:{auc:.4f} | AUPR:{aupr:.4f}")
+
+    return y_score
+
 
 
 if __name__ == "__main__":
@@ -383,7 +380,7 @@ if __name__ == "__main__":
         device = torch.device("cuda:{}".format(args.gpu_id) if torch.cuda.is_available() else "cpu")
         file_path = args.pre_save_path + '/{}/{}/{}/{}'.format(args.dataset, args.dataset_name, args.base_backend_type, seed)
         if os.path.exists(file_path + '/pre_train_model.pth'):
-            model = torch.load(file_path + '/pre_train_model.pth')
+            model = torch.load(file_path + '/pre_train_model.pth', map_location=device)
         else:
             base_backend_config, str_backend_config  = get_backend_config(args, dataset_num_features, input_edge_dim)
             base_backend = build_backend_from_config(base_backend_config)

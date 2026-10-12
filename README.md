@@ -80,7 +80,7 @@ EHSE-OOD/
 ├── main_OGB.py                    # OGB cross-dataset experiments
 ├── pre_train.py                   # EHA pretraining routine
 ├── environment.yml                # Conda environment
-└── model.png                      # Model architecture figure
+└── model.pdf                      # Model architecture figure
 ```
 
 ---
@@ -403,7 +403,7 @@ The default main-script configuration includes:
 | `t_learning_rate` | HRN test-time learning rate | 1e-3 |
 | `pre_epochs` | Maximum pretraining epochs | 500 |
 | `num_epoch` | Test-time optimization epochs | 400 |
-| `gamma` | Conditional relation loss weight | 0.1 |
+| `gamma` | Conditional relation loss weight | 0.2 |
 
 The paper studies the sensitivity of the GNN depth, HSG depth, loss-balancing coefficient, and contrastive temperature. When reproducing a specific table or ablation, please use the exact configuration associated with that experiment.
 
